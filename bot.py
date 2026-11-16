@@ -5,10 +5,10 @@ from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardB
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from sqlalchemy import select
-from app.config import settings
-from app.db import init_db, SessionLocal
-from app.models import Business, Customer, CatalogItem, Order, ConversationMessage
-from app.ai import answer_question
+from config import settings
+from db import init_db, SessionLocal
+from models import Business, Customer, CatalogItem, Order, ConversationMessage
+from ai import answer_question
 
 logging.basicConfig(level=logging.INFO)
 dp = Dispatcher()
