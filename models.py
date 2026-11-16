@@ -1,7 +1,7 @@
 from sqlalchemy import String, Integer, Text, Boolean, ForeignKey, DateTime
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
-from app.db import Base
+from db import Base
 
 class Business(Base):
     __tablename__ = "businesses"
