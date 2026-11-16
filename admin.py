@@ -3,11 +3,10 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlalchemy import select, func, desc
 import secrets, html
-from app.config import settings
-from app.db import init_db, SessionLocal
-from app.models import Business, CatalogItem, Customer, Order
-
-app = FastAPI(title="Business Bot Pro Admin")
+from config import settings
+from db import init_db, SessionLocal
+from models import Business, CatalogItem, Customer, Orde
+FastAPI(title="Business Bot Pro Admin")
 security = HTTPBasic()
 
 def auth(credentials: HTTPBasicCredentials = Depends(security)):
@@ -23,14 +22,14 @@ def page(body):
     body{font-family:Tahoma,Arial;background:#f4f6fa;margin:0;color:#182230}.wrap{max-width:1100px;margin:28px auto;padding:16px}
     .card{background:white;border-radius:14px;padding:18px;margin:14px 0;box-shadow:0 3px 14px #17255410}
     input,textarea,select{padding:10px;border:1px solid #ccd3df;border-radius:8px;margin:5px;max-width:95%}button{background:#155eef;color:white;border:0;padding:10px 16px;border-radius:8px;cursor:pointer}
-    table{width:100%;border-collapse:collapse}td,th{padding:9px;border-bottom:1px solid #e5e7eb;text-align:right}small{color:#667085}
+  table{width:100%;border-collapse:collapse}td,th{padding:9px;border-bottom:1px solid #e5e7eb;text-align:right}small{color:#667085}
     </style><div class="wrap"><h2>Business Bot Pro</h2><small>پنل مدیریت چندکسب‌وکاره</small>""" + body + "</div></html>"
 
-@app.on_event("startup")
+on_event("startup")
 def startup():
     init_db()
 
-@app.get("/", response_class=HTMLResponse)
+get("/", response_class=HTMLResponse)
 def dashboard(_: bool = Depends(auth)):
     with SessionLocal() as db:
         businesses = db.scalars(select(Business).order_by(Business.id.desc())).all()
@@ -45,7 +44,7 @@ def dashboard(_: bool = Depends(auth)):
     <div class='card'><a href='/orders'>مشاهده همه درخواست‌ها</a></div>"""
     return page(body)
 
-@app.post("/business/add")
+post("/business/add")
 def add_business(name: str = Form(...), slug: str = Form(...), admin_ids: str = Form(""), description: str = Form(""), _: bool = Depends(auth)):
     with SessionLocal() as db:
         slug = slug.strip().lower()
@@ -55,7 +54,7 @@ def add_business(name: str = Form(...), slug: str = Form(...), admin_ids: str = 
         db.commit()
     return RedirectResponse("/", status_code=303)
 
-@app.get("/business/{bid}", response_class=HTMLResponse)
+get("/business/{bid}", response_class=HTMLResponse)
 def business_detail(bid: int, _: bool = Depends(auth)):
     with SessionLocal() as db:
         b = db.get(Business, bid)
@@ -73,7 +72,7 @@ def business_detail(bid: int, _: bool = Depends(auth)):
         <div class='card'><a href='/orders?business_id={bid}'>درخواست‌های این کسب‌وکار</a> | <a href='/'>بازگشت</a></div>"""
     return page(body)
 
-@app.post("/business/{bid}/update")
+post("/business/{bid}/update")
 def update_business(bid: int, admin_ids: str = Form(""), description: str = Form(""), _: bool = Depends(auth)):
     with SessionLocal() as db:
         b = db.get(Business, bid)
@@ -84,7 +83,7 @@ def update_business(bid: int, admin_ids: str = Form(""), description: str = Form
         db.commit()
     return RedirectResponse(f"/business/{bid}", status_code=303)
 
-@app.post("/business/{bid}/item")
+post("/business/{bid}/item")
 def add_item(bid: int, title: str = Form(...), kind: str = Form("service"), price_text: str = Form("استعلام قیمت"), description: str = Form(""), _: bool = Depends(auth)):
     with SessionLocal() as db:
         if not db.get(Business, bid):
@@ -93,7 +92,7 @@ def add_item(bid: int, title: str = Form(...), kind: str = Form("service"), pric
         db.commit()
     return RedirectResponse(f"/business/{bid}", status_code=303)
 
-@app.get("/orders", response_class=HTMLResponse)
+get("/orders", response_class=HTMLResponse)
 def orders(business_id: int | None = None, _: bool = Depends(auth)):
     with SessionLocal() as db:
         stmt = select(Order).order_by(desc(Order.id))
