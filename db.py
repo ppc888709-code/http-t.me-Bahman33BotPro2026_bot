@@ -1,7 +1,7 @@
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
-from app.config import settings
+from config import settings
 
 if settings.DATABASE_URL.startswith("sqlite"):
     os.makedirs("data", exist_ok=True)
