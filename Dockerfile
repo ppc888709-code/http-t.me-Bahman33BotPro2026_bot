@@ -5,4 +5,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 RUN mkdir -p data
 ENV PYTHONUNBUFFERED=1
-CMD ["python", "-m", "app.bot"]
+   CMD ["python", "bot.py"]
