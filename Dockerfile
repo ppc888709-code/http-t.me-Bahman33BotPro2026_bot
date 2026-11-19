@@ -1,8 +1,6 @@
 FROM python:3.11-slim
-WORKDIR /app
+WORKDIR /srv/telegram_service
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
-RUN mkdir -p data
-ENV PYTHONUNBUFFERED=1
-   CMD ["python", "bot.py"]
+CMD ["python", "-m", "botcore.bot"]

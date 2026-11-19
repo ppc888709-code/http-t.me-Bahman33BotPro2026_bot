@@ -1,17 +1,19 @@
 services:
-  bot:
+  telegram_worker:
     build: .
-    command: python -m app.bot
+    command: python -m botcore.bot
     env_file: .env
     volumes:
-      - ./data:/app/data
+      - bot_data:/var/data
     restart: unless-stopped
-  admin:
+  control_panel:
     build: .
-    command: uvicorn app.admin:app --host 0.0.0.0 --port 8000
+    command: uvicorn botcore.admin:api --host 0.0.0.0 --port 8000
     env_file: .env
-    volumes:
-      - ./data:/app/data
     ports:
-      - "127.0.0.1:8000:8000"
+      - "8000:8000"
+    volumes:
+      - bot_data:/var/data
     restart: unless-stopped
+volumes:
+  bot_data:

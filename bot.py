@@ -1,187 +1,121 @@
-import asyncio, logging
+import asyncio
+import logging
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart
-from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.filters import CommandStart, Command
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
-from sqlalchemy import select
-from config import settings
-from db import init_db, SessionLocal
-from models import Business, Customer, CatalogItem, Order, ConversationMessage
-from ai import answer_question
+from .config import BOT_TOKEN, ADMIN_IDS, BUSINESS_NAME
+from .db import init_db, list_businesses, get_business, save_customer, create_order
+from .ai_helper import answer_question
 
 logging.basicConfig(level=logging.INFO)
-dp = Dispatcher()
+log = logging.getLogger('business_bot')
 
-class Flow(StatesGroup):
+class OrderFlow(StatesGroup):
+    business = State()
     name = State()
     phone = State()
-    request_details = State()
-    ask_ai = State()
+    details = State()
 
-def get_business(bid):
-    with SessionLocal() as db:
-        return db.get(Business, bid)
+main_keyboard = ReplyKeyboardMarkup(keyboard=[
+    [KeyboardButton(text='🛍 ثبت سفارش / استعلام قیمت')],
+    [KeyboardButton(text='ℹ️ راهنمایی'), KeyboardButton(text='☎️ ارتباط با مدیر')]
+], resize_keyboard=True)
 
-def business_keyboard():
-    with SessionLocal() as db:
-        businesses = db.scalars(select(Business).where(Business.is_active == True).order_by(Business.name)).all()
-        rows = [[InlineKeyboardButton(text=b.name, callback_data=f"biz:{b.id}")] for b in businesses]
-    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
-
-def main_keyboard():
-    return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="🛍 محصولات و خدمات"), KeyboardButton(text="📝 ثبت درخواست قیمت")],
-        [KeyboardButton(text="🤖 پرسش از دستیار"), KeyboardButton(text="☎️ اطلاعات تماس")]
-    ], resize_keyboard=True)
-
-@dp.message(CommandStart())
-async def start(message: Message, state: FSMContext):
-    await state.clear()
-    kb = business_keyboard()
-    if not kb:
-        await message.answer("هنوز کسب‌وکاری تعریف نشده است. مدیر باید ابتدا از پنل مدیریت، کسب‌وکار اضافه کند.")
+async def start(message: Message):
+    businesses = list_businesses()
+    if not businesses:
+        await message.answer('در حال حاضر کسب‌وکاری برای انتخاب فعال نیست. لطفاً بعداً مراجعه کنید.')
         return
-    await message.answer("سلام! به Business Bot Pro خوش آمدید. کسب‌وکار موردنظر را انتخاب کنید:", reply_markup=kb)
+    lines = [f'سلام {message.from_user.first_name or "دوست عزیز"} 🌷', 'به سامانه خوش آمدید.', '', 'برای ثبت سفارش از دکمه زیر استفاده کنید.']
+    await message.answer('\n'.join(lines), reply_markup=main_keyboard)
 
-@dp.callback_query(F.data.startswith("biz:"))
-async def choose_business(call: CallbackQuery, state: FSMContext):
-    bid = int(call.data.split(":")[1])
-    b = get_business(bid)
-    if not b or not b.is_active:
-        await call.answer("این کسب‌وکار در دسترس نیست.", show_alert=True)
+async def begin_order(message: Message, state: FSMContext):
+    businesses = list_businesses()
+    if not businesses:
+        await message.answer('فعلاً کسب‌وکار فعالی ثبت نشده است.')
         return
-    await state.clear()
-    await state.update_data(business_id=bid)
-    await call.message.answer(f"به «{b.name}» خوش آمدید. برای ثبت سفارش، ابتدا نام و شماره تماس خود را ثبت کنید.", reply_markup=main_keyboard())
-    await call.answer()
+    if len(businesses) == 1:
+        await state.update_data(business_id=businesses[0]['id'], business_name=businesses[0]['name'])
+        await state.set_state(OrderFlow.name)
+        await message.answer('نام و نام خانوادگی خود را بنویسید:', reply_markup=ReplyKeyboardRemove())
+    else:
+        buttons = [[KeyboardButton(text=f"{b['id']} - {b['name']}")] for b in businesses]
+        await state.set_state(OrderFlow.business)
+        await message.answer('نام کسب‌وکار موردنظر را انتخاب کنید:', reply_markup=ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, one_time_keyboard=True))
 
-async def ensure_customer(message: Message, state: FSMContext):
-    data = await state.get_data()
-    bid = data.get("business_id")
-    if not bid:
-        await message.answer("ابتدا /start را بزنید و کسب‌وکار را انتخاب کنید.")
-        return False
-    with SessionLocal() as db:
-        customer = db.scalar(select(Customer).where(Customer.business_id == bid, Customer.telegram_id == message.from_user.id))
-        if customer and customer.phone:
-            return True
-    await state.set_state(Flow.name)
-    await message.answer("لطفاً نام و نام خانوادگی خود را بنویسید:")
-    return False
-
-@dp.message(Flow.name)
-async def save_name(message: Message, state: FSMContext):
-    await state.update_data(full_name=(message.text or "")[:160])
-    await state.set_state(Flow.phone)
-    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="📱 ارسال شماره تماس", request_contact=True)]], resize_keyboard=True, one_time_keyboard=True)
-    await message.answer("برای ادامه، شماره تماس خود را با دکمه زیر به اشتراک بگذارید:", reply_markup=kb)
-
-@dp.message(Flow.phone, F.contact)
-async def save_phone(message: Message, state: FSMContext):
-    if message.contact.user_id and message.contact.user_id != message.from_user.id:
-        await message.answer("لطفاً شماره تماس متعلق به خودتان را ارسال کنید.")
+async def choose_business(message: Message, state: FSMContext):
+    try:
+        business_id = int(message.text.split('-', 1)[0].strip())
+    except (ValueError, AttributeError):
+        await message.answer('لطفاً یکی از گزینه‌های نمایش‌داده‌شده را انتخاب کنید.')
         return
-    data = await state.get_data()
-    bid = data["business_id"]
-    with SessionLocal() as db:
-        customer = db.scalar(select(Customer).where(Customer.business_id == bid, Customer.telegram_id == message.from_user.id))
-        if not customer:
-            customer = Customer(business_id=bid, telegram_id=message.from_user.id)
-            db.add(customer)
-        customer.full_name = data.get("full_name", "")
-        customer.phone = message.contact.phone_number
-        customer.username = message.from_user.username or ""
-        db.commit()
-    await state.clear()
-    await state.update_data(business_id=bid)
-    await message.answer("اطلاعات شما ثبت شد. از منوی زیر استفاده کنید.", reply_markup=main_keyboard())
-
-@dp.message(F.text == "🛍 محصولات و خدمات")
-async def catalog(message: Message, state: FSMContext):
-    bid = (await state.get_data()).get("business_id")
-    if not bid:
-        await message.answer("ابتدا /start را بزنید.")
-        return
-    with SessionLocal() as db:
-        items = db.scalars(select(CatalogItem).where(CatalogItem.business_id == bid, CatalogItem.is_active == True)).all()
-        output = [(i.title, i.description, i.price_text) for i in items]
-    if not output:
-        await message.answer("هنوز محصول یا خدمتی ثبت نشده است.")
-        return
-    for title, description, price in output:
-        await message.answer(f"<b>{title}</b>\n{description}\nقیمت: {price}", parse_mode="HTML")
-
-@dp.message(F.text == "📝 ثبت درخواست قیمت")
-async def new_request(message: Message, state: FSMContext):
-    if not await ensure_customer(message, state):
-        return
-    await state.set_state(Flow.request_details)
-    await message.answer("درخواست خود را بنویسید؛ نام محصول/خدمت، تعداد، شهر و توضیحات لازم را ذکر کنید.")
-
-@dp.message(Flow.request_details)
-async def save_request(message: Message, state: FSMContext, bot: Bot):
-    data = await state.get_data()
-    bid = data["business_id"]
-    with SessionLocal() as db:
-        customer = db.scalar(select(Customer).where(Customer.business_id == bid, Customer.telegram_id == message.from_user.id))
-        if not customer:
-            await message.answer("ابتدا اطلاعات تماس را ثبت کنید.")
-            await state.clear()
-            return
-        order = Order(business_id=bid, customer_id=customer.id, request_type="quote", details=(message.text or "")[:4000])
-        db.add(order)
-        db.commit()
-        oid = order.id
-        business = db.get(Business, bid)
-        admins = [x.strip() for x in (business.admin_ids or "").split(",") if x.strip()]
-        note = f"🔔 درخواست جدید #{oid}\nکسب‌وکار: {business.name}\nمشتری: {customer.full_name}\nتماس: {customer.phone}\nمتن: {order.details}"
-    for admin_id in admins:
-        try:
-            await bot.send_message(int(admin_id), note)
-        except Exception:
-            logging.exception("Admin notification failed")
-    await state.clear()
-    await state.update_data(business_id=bid)
-    await message.answer(f"درخواست شما با شماره پیگیری {oid} ثبت شد.", reply_markup=main_keyboard())
-
-@dp.message(F.text == "🤖 پرسش از دستیار")
-async def ask_start(message: Message, state: FSMContext):
-    if not await ensure_customer(message, state):
-        return
-    await state.set_state(Flow.ask_ai)
-    await message.answer("سؤال خود را بنویسید. پاسخ بر اساس اطلاعات ثبت‌شده کسب‌وکار ارائه می‌شود.")
-
-@dp.message(Flow.ask_ai)
-async def ask_ai(message: Message, state: FSMContext):
-    data = await state.get_data()
-    bid = data["business_id"]
-    business = get_business(bid)
-    question = (message.text or "")[:2000]
-    answer = await answer_question(business.name, business.description, question)
-    with SessionLocal() as db:
-        db.add(ConversationMessage(business_id=bid, telegram_id=message.from_user.id, role="user", content=question))
-        db.add(ConversationMessage(business_id=bid, telegram_id=message.from_user.id, role="assistant", content=answer))
-        db.commit()
-    await message.answer(answer, reply_markup=main_keyboard())
-    await state.clear()
-    await state.update_data(business_id=bid)
-
-@dp.message(F.text == "☎️ اطلاعات تماس")
-async def contact_info(message: Message, state: FSMContext):
-    bid = (await state.get_data()).get("business_id")
-    business = get_business(bid) if bid else None
+    business = get_business(business_id)
     if not business:
-        await message.answer("ابتدا کسب‌وکار را انتخاب کنید.")
+        await message.answer('این گزینه معتبر نیست. دوباره انتخاب کنید.')
         return
-    await message.answer(f"{business.name}\n{business.description or 'برای اطلاعات بیشتر درخواست ثبت کنید.'}")
+    await state.update_data(business_id=business_id, business_name=business['name'])
+    await state.set_state(OrderFlow.name)
+    await message.answer('نام و نام خانوادگی خود را بنویسید:', reply_markup=ReplyKeyboardRemove())
+
+async def receive_name(message: Message, state: FSMContext):
+    if not message.text or len(message.text.strip()) < 2:
+        await message.answer('لطفاً نام خود را وارد کنید.')
+        return
+    await state.update_data(customer_name=message.text.strip())
+    await state.set_state(OrderFlow.phone)
+    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text='ارسال شماره تماس', request_contact=True)]], resize_keyboard=True, one_time_keyboard=True)
+    await message.answer('شماره تماس خود را ارسال کنید یا به صورت متن بنویسید:', reply_markup=kb)
+
+async def receive_phone(message: Message, state: FSMContext):
+    phone = message.contact.phone_number if message.contact else (message.text or '').strip()
+    if len(phone) < 7:
+        await message.answer('شماره تماس معتبر وارد کنید.')
+        return
+    await state.update_data(phone=phone)
+    await state.set_state(OrderFlow.details)
+    await message.answer('شرح سفارش یا کالای موردنظر را بنویسید:', reply_markup=ReplyKeyboardRemove())
+
+async def receive_details(message: Message, state: FSMContext, bot: Bot):
+    details = (message.text or '').strip()
+    if len(details) < 3:
+        await message.answer('لطفاً توضیحات سفارش را کامل‌تر بنویسید.')
+        return
+    data = await state.get_data()
+    order_id = create_order(data['business_id'], message.from_user.id, data['customer_name'], data['phone'], details)
+    save_customer(message.from_user.id, data['customer_name'], data['phone'])
+    note = (f'🆕 سفارش جدید شماره {order_id}\nکسب‌وکار: {data["business_name"]}\n'
+            f'نام: {data["customer_name"]}\nتلفن: {data["phone"]}\n'
+            f'شناسه تلگرام: {message.from_user.id}\nشرح: {details}')
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(admin_id, note)
+        except Exception as exc:
+            log.warning('Could not notify administrator %s: %s', admin_id, exc)
+    await state.clear()
+    await message.answer(f'درخواست شما با شماره {order_id} ثبت شد. مدیر برای پیگیری با شما تماس می‌گیرد. 🌷', reply_markup=main_keyboard)
+
+async def help_user(message: Message):
+    answer = await answer_question(message.text or 'راهنمایی')
+    await message.answer(answer, reply_markup=main_keyboard)
 
 async def main():
-    if not settings.BOT_TOKEN or "PASTE_" in settings.BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN را در فایل .env تنظیم کنید.")
+    if not BOT_TOKEN:
+        raise RuntimeError('BOT_TOKEN is missing. Set it in the service environment variables.')
     init_db()
-    bot = Bot(settings.BOT_TOKEN)
+    bot = Bot(BOT_TOKEN)
+    dp = Dispatcher()
+    dp.message.register(start, CommandStart())
+    dp.message.register(begin_order, F.text == '🛍 ثبت سفارش / استعلام قیمت')
+    dp.message.register(help_user, F.text.in_({'ℹ️ راهنمایی', '☎️ ارتباط با مدیر'}))
+    dp.message.register(choose_business, OrderFlow.business)
+    dp.message.register(receive_name, OrderFlow.name)
+    dp.message.register(receive_phone, OrderFlow.phone)
+    dp.message.register(receive_details, OrderFlow.details)
+    dp.message.register(help_user, Command('help'))
+    log.info('Bot polling started')
     await dp.start_polling(bot)
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     asyncio.run(main())
